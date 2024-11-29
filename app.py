@@ -27,7 +27,16 @@ if 'key' not in st.session_state:
 if 'mostrar_confirmacao' not in st.session_state:
     st.session_state.mostrar_confirmacao = False
 
-# Parte 2: Funções de controle e processamento de arquivos
+# Função de utilidade para normalizar CNPJ
+def normalizar_cnpj(cnpj):
+    """
+    Remove caracteres especiais do CNPJ
+    """
+    if cnpj:
+        return ''.join(filter(str.isdigit, cnpj))
+    return ''
+
+# Funções de controle do sistema
 def reiniciar_sistema():
     """
     Reinicia o sistema limpando a sessão
@@ -37,6 +46,12 @@ def reiniciar_sistema():
     for key in list(st.session_state.keys()):
         if key not in ['key', 'mostrar_confirmacao']:
             del st.session_state[key]
+
+def toggle_confirmacao():
+    st.session_state.mostrar_confirmacao = True
+
+def cancelar_reinicio():
+    st.session_state.mostrar_confirmacao = False
 
 def get_theme_colors():
     """
@@ -66,13 +81,6 @@ def get_theme_colors():
             'button_border': '#DDDDDD',
             'button_hover': '#F8F9FA',
         }
-
-def toggle_confirmacao():
-    st.session_state.mostrar_confirmacao = True
-
-def cancelar_reinicio():
-    st.session_state.mostrar_confirmacao = False
-    
 def extrair_texto_xml(conteudo):
     """
     Extrai informações relevantes de arquivos XML de NFe
@@ -83,7 +91,7 @@ def extrair_texto_xml(conteudo):
         # Define o namespace padrão da NFe
         ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
         
-        # Extrai informações principais
+        # Lista para armazenar todas as informações
         info = []
         
         # Informações da nota
@@ -100,7 +108,23 @@ def extrair_texto_xml(conteudo):
             if nome_emit is not None:
                 info.append(f"Emitente: {nome_emit.text}")
             if cnpj_emit is not None:
-                info.append(f"CNPJ: {cnpj_emit.text}")
+                cnpj_formatado = f"{cnpj_emit.text}"  # CNPJ sem formatação
+                cnpj_com_formato = f"{cnpj_emit.text[:2]}.{cnpj_emit.text[2:5]}.{cnpj_emit.text[5:8]}/{cnpj_emit.text[8:12]}-{cnpj_emit.text[12:]}"  # CNPJ formatado
+                info.append(f"CNPJ Emitente: {cnpj_formatado}")
+                info.append(f"CNPJ Emitente Formatado: {cnpj_com_formato}")
+        
+        # Dados do destinatário
+        dest = root.find('.//nfe:dest', ns)
+        if dest is not None:
+            nome_dest = dest.find('nfe:xNome', ns)
+            cnpj_dest = dest.find('nfe:CNPJ', ns)
+            if nome_dest is not None:
+                info.append(f"Destinatário: {nome_dest.text}")
+            if cnpj_dest is not None:
+                cnpj_formatado = f"{cnpj_dest.text}"  # CNPJ sem formatação
+                cnpj_com_formato = f"{cnpj_dest.text[:2]}.{cnpj_dest.text[2:5]}.{cnpj_dest.text[5:8]}/{cnpj_dest.text[8:12]}-{cnpj_dest.text[12:]}"  # CNPJ formatado
+                info.append(f"CNPJ Destinatário: {cnpj_formatado}")
+                info.append(f"CNPJ Destinatário Formatado: {cnpj_com_formato}")
         
         # Dados dos produtos
         produtos = root.findall('.//nfe:det', ns)
@@ -109,20 +133,30 @@ def extrair_texto_xml(conteudo):
             if prod_info is not None:
                 codigo = prod_info.find('nfe:cProd', ns)
                 descricao = prod_info.find('nfe:xProd', ns)
+                ncm = prod_info.find('nfe:NCM', ns)
                 quantidade = prod_info.find('nfe:qCom', ns)
                 valor = prod_info.find('nfe:vUnCom', ns)
                 
                 prod_text = []
-                if descricao is not None:
-                    prod_text.append(f"Produto: {descricao.text}")
                 if codigo is not None:
                     prod_text.append(f"Código: {codigo.text}")
+                if descricao is not None:
+                    prod_text.append(f"Produto: {descricao.text}")
+                if ncm is not None:
+                    prod_text.append(f"NCM: {ncm.text}")
                 if quantidade is not None:
                     prod_text.append(f"Qtd: {quantidade.text}")
                 if valor is not None:
                     prod_text.append(f"Valor: {valor.text}")
                     
                 info.append(" | ".join(prod_text))
+        
+        # Adiciona valores totais
+        total = root.find('.//nfe:ICMSTot', ns)
+        if total is not None:
+            vnf = total.find('nfe:vNF', ns)
+            if vnf is not None:
+                info.append(f"Valor Total NF: {vnf.text}")
         
         return "\n".join(info)
     except Exception as e:
@@ -238,7 +272,7 @@ def main():
 
     st.markdown("""
         <style>
-                /* Reduz o espaço superior */
+        /* Reduz o espaço superior */
         .block-container {
             padding-top: 2rem !important;
         }
@@ -365,7 +399,6 @@ def main():
         }}
         </style>
     """, unsafe_allow_html=True)
-    
     # Botões de reiniciar
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -433,7 +466,6 @@ def main():
             status_text.empty()
             
             st.success('✅ Processamento concluído!')
-        
         # Interface de busca
         st.header("🔎 Buscar Produtos")
         
@@ -452,7 +484,7 @@ def main():
             
             div.stButton > button {
                 margin-top: 1px;
-                height: 30px;  /* Ajuste essa altura conforme necessário */
+                height: 30px;
             }
             </style>
         """, unsafe_allow_html=True)
@@ -470,6 +502,7 @@ def main():
         
         with search_col2:
             buscar = st.button("Buscar", use_container_width=True)
+
         # Realizar busca
         if (termo_busca and st.session_state.get('search_triggered', False)) or buscar:
             st.session_state.search_triggered = False  # Reset do trigger
@@ -482,13 +515,26 @@ def main():
                     st.error("Erro na estrutura dos dados. Tente reprocessar os arquivos.")
                     return
                 
+                # Normaliza o termo de busca se parecer um CNPJ
+                termo_busca_normalizado = ''.join(filter(str.isdigit, termo_busca))
+
                 st.session_state.df_index['conteudo'] = st.session_state.df_index['conteudo'].fillna('')
-                
-                mascara = st.session_state.df_index['conteudo'].str.lower().str.contains(
-                    termo_busca.lower(),
-                    regex=False,
-                    na=False
-                )
+
+                # Busca modificada para diferentes tipos de conteúdo
+                if termo_busca_normalizado and len(termo_busca_normalizado) > 6:  # Se parece ser um CNPJ ou NCM
+                    # Busca com regex para CNPJ (formatado ou não) e NCM
+                    padrao_busca = f"({termo_busca}|{termo_busca_normalizado})"
+                    mascara = st.session_state.df_index['conteudo'].str.lower().str.contains(
+                        padrao_busca,
+                        regex=True,
+                        na=False
+                    )
+                else:  # Busca normal por texto
+                    mascara = st.session_state.df_index['conteudo'].str.lower().str.contains(
+                        termo_busca.lower(),
+                        regex=False,
+                        na=False
+                    )
                 
                 resultados = st.session_state.df_index[mascara]
                 
